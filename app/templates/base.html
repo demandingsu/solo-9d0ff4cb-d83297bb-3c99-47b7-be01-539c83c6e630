@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}市政采购公告档案{% endblock %}</title>
+<style>
+  :root { --ink:#1b2430; --muted:#5f6d79; --line:#d8dee4; --accent:#155e4b;
+          --bg:#f5f7f6; --warn:#8a4b00; --danger:#a2231d; --ok:#1f6b3a; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.65 "Noto Sans SC","PingFang SC",system-ui,sans-serif;
+         color:var(--ink); background:var(--bg); }
+  header.site { background:#fff; border-bottom:1px solid var(--line); padding:14px 24px; }
+  header.site .wrap { max-width:1040px; margin:0 auto; display:flex; gap:18px;
+                      align-items:baseline; flex-wrap:wrap; }
+  header.site strong { font-size:17px; }
+  header.site nav { margin-left:auto; display:flex; gap:16px; font-size:14px; }
+  header.site a { color:var(--accent); text-decoration:none; }
+  main { max-width:1040px; margin:26px auto 72px; padding:0 24px; }
+  h1 { font-size:23px; margin:0 0 8px; }
+  h2 { font-size:17px; margin:32px 0 12px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px;
+          padding:18px 22px; margin:14px 0; }
+  .meta { color:var(--muted); font-size:13.5px; }
+  a { color:var(--accent); }
+  .banner { border-radius:8px; padding:10px 14px; margin:0 0 18px; font-size:14px;
+            background:#e9f2ec; border:1px solid #b9d8c3; color:var(--ok); }
+  .banner.warn { background:#fdf4e7; border-color:#e6c99d; color:var(--warn); }
+  .banner.err { background:#fbeceb; border-color:#e5bdb9; color:var(--danger); }
+  label { display:block; font-weight:600; margin:0 0 6px; }
+  input[type=text] { width:100%; max-width:420px; padding:9px 11px; font:inherit;
+                     border:1px solid var(--line); border-radius:6px; background:#fff; }
+  button { font:inherit; padding:8px 18px; border-radius:6px; cursor:pointer;
+           border:1px solid var(--accent); background:var(--accent); color:#fff; }
+  .inline-form { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--line);
+           vertical-align:top; }
+  th { font-size:12.5px; color:var(--muted); font-weight:600; text-transform:none; }
+  tr:last-child td { border-bottom:none; }
+  .pill { display:inline-block; font-size:12px; border-radius:999px; padding:1px 8px;
+          border:1px solid var(--line); color:var(--muted); white-space:nowrap; }
+  .pill.retracted { color:var(--danger); border-color:currentColor; }
+  .pill.current { color:var(--ok); border-color:currentColor; }
+  .pill.conflict { color:var(--warn); border-color:currentColor; }
+  pre.body { white-space:pre-wrap; font:inherit; background:var(--bg); padding:16px 18px;
+             border-radius:8px; border:1px solid var(--line); margin:0; }
+  .kv { display:grid; grid-template-columns:170px 1fr; gap:6px 16px; font-size:14px; }
+  .kv dt { color:var(--muted); }
+  .kv dd { margin:0; word-break:break-word; }
+  code { font-family:"SFMono-Regular",ui-monospace,monospace; font-size:12.5px;
+         background:var(--bg); padding:1px 5px; border-radius:4px; }
+  .empty { color:var(--muted); font-style:italic; }
+  footer { color:var(--muted); font-size:12.5px; text-align:center; padding:24px; }
+  .two-col { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:18px; }
+  @media (max-width:760px) { .two-col { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<header class="site">
+  <div class="wrap">
+    <strong>市政采购公告档案</strong>
+    <span class="meta">按公告号采集 · 逐修订留存 · 撤稿不删旧版</span>
+    <nav><a href="/">档案首页</a></nav>
+  </div>
+</header>
+<main>
+{% if error %}<div class="banner err">{{ error }}</div>{% endif %}
+{% block content %}{% endblock %}
+</main>
+<footer>本档案用于留证核对；采集失败不会改动已存档版本。</footer>
+</body>
+</html>

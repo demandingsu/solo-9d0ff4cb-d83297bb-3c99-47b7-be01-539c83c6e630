@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>采购公告</h1>
+<p class="meta">当前站上公告 {{ notices|length }} 条。初始数据由启动脚本写入，也可在下方新增。</p>
+
+<div class="card">
+  <h2 style="margin-top:0">公告列表</h2>
+  <ul class="notice-list" style="list-style:none;padding:0;margin:0">
+  {% for n in notices %}
+    <li>
+      <a href="/notice/{{ n.number|urlencode }}">{{ n.number }} · {{ n.title }}</a>
+      <span class="pill">站上修订 r{{ n.revision }}</span>
+      {% if n.retracted %}<span class="pill retracted">已撤稿</span>{% endif %}
+      <div class="meta">附件：{{ n.attachment.filename }}（{{ n.attachment.size }} 字节）</div>
+    </li>
+  {% else %}
+    <li class="meta">尚无公告。</li>
+  {% endfor %}
+  </ul>
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">新增公告</h2>
+  <form method="post" action="/create" enctype="multipart/form-data">
+    <label for="number">公告号</label>
+    <input id="number" type="text" name="number" required
+           placeholder="例如 ZFCG-2026-0002">
+    <label for="title">标题</label>
+    <input id="title" type="text" name="title" required>
+    <label for="body">正文</label>
+    <textarea id="body" name="body" required></textarea>
+    <label for="attachment">附件（每则公告仅一份）</label>
+    <input id="attachment" type="file" name="attachment" required>
+    <p><button type="submit">发布</button></p>
+  </form>
+</div>
+{% endblock %}

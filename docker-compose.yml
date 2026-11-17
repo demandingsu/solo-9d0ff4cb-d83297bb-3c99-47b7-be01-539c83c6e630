@@ -1,0 +1,56 @@
+services:
+  demo:
+    build: .
+    image: procurement-archive:local
+    command:
+      - uvicorn
+      - demo.main:create_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    environment:
+      DEMO_DB_PATH: /data/demo.db
+    volumes:
+      - demo-data:/data
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/notices/ZFCG-2026-0001', timeout=5)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  archive:
+    build: .
+    image: procurement-archive:local
+    command:
+      - uvicorn
+      - app.main:create_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    environment:
+      ARCHIVE_DB_PATH: /data/archive.db
+      SOURCE_BASE_URL: http://demo:8000
+    volumes:
+      - archive-data:/data
+    ports:
+      - "8001:8000"
+    depends_on:
+      demo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+volumes:
+  demo-data:
+  archive-data:

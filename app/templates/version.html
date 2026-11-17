@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}{{ record.announcement_number }} r{{ record.revision }} · 公告档案{% endblock %}
+{% block content %}
+<p class="meta"><a href="/notice/{{ record.announcement_number|urlencode }}">← 返回公告 {{ record.announcement_number }}</a></p>
+<h1>存档版本 r{{ record.revision }}</h1>
+<p class="meta">
+  采集于 {{ record.captured_at|ts }} ·
+  {% if record.source_retracted %}采集时源站处于撤稿状态{% else %}采集时源站在发{% endif %}
+</p>
+
+<div class="card">
+  <h2 style="margin-top:0">{{ record.title }}</h2>
+  <dl class="kv">
+    <dt>站点修订号</dt><dd>r{{ record.revision }}
+      <span class="meta">（正文 r{{ record.body_revision }} / 附件 r{{ record.attachment_revision }}）</span></dd>
+    <dt>源地址</dt><dd><code>{{ record.source_url }}</code></dd>
+    <dt>源站更新时间</dt><dd>{{ record.source_updated_at|ts }}</dd>
+    <dt>正文 SHA-256</dt><dd><code>{{ record.body_sha256 }}</code></dd>
+    <dt>内容指纹</dt><dd><code>{{ record.content_hash }}</code></dd>
+  </dl>
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">正文</h2>
+  <pre class="body">{{ record.body }}</pre>
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">附件（该修订唯一附件）</h2>
+  <p>{{ record.attachment_filename }}<br>
+    <span class="meta">{{ record.attachment_content_type }} ·
+      {{ record.attachment_size|bytes }}</span></p>
+  <dl class="kv"><dt>SHA-256</dt><dd><code>{{ record.attachment_sha256 }}</code></dd></dl>
+  <p>
+    <a href="/notice/{{ record.announcement_number|urlencode }}/version/{{ record.revision }}/attachment">
+      下载本版附件</a>
+  </p>
+</div>
+
+<h2>同公告其他版本</h2>
+{% if versions|length > 1 %}
+<div class="card" style="padding:4px 10px">
+<table>
+  <thead><tr><th>修订</th><th>采集时间</th><th>标题</th><th>附件</th></tr></thead>
+  <tbody>
+  {% for v in versions %}
+    <tr>
+      <td>{% if v.revision == record.revision %}<strong>r{{ v.revision }}</strong>
+          {% else %}<a href="/notice/{{ record.announcement_number|urlencode }}/version/{{ v.revision }}">r{{ v.revision }}</a>{% endif %}</td>
+      <td class="meta">{{ v.captured_at|ts }}</td>
+      <td>{{ v.title }}</td>
+      <td><a href="/notice/{{ record.announcement_number|urlencode }}/version/{{ v.revision }}/attachment">下载</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="empty">暂无其他版本。</p>
+{% endif %}
+{% endblock %}

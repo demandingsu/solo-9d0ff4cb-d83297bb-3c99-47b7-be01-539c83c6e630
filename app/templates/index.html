@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>公告档案</h1>
+<p class="meta">输入公告号从示范站采集。每则公告仅一份附件，每个站点修订单独留档。</p>
+
+<div class="card">
+  <form method="post" action="/capture" class="inline-form">
+    <label for="number" style="margin:0">公告号</label>
+    <input id="number" type="text" name="number" required
+           placeholder="例如 ZFCG-2026-0001" style="max-width:280px">
+    <button type="submit">采集公告</button>
+  </form>
+</div>
+
+<h2>已归档公告</h2>
+{% if announcements %}
+<div class="card" style="padding:4px 10px">
+<table>
+  <thead>
+    <tr>
+      <th>公告号</th><th>标题</th><th>版本数</th><th>最新修订</th>
+      <th>状态</th><th>最近核对</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for a in announcements %}
+    <tr>
+      <td><a href="/notice/{{ a.number|urlencode }}">{{ a.number }}</a></td>
+      <td>{{ a.latest_title }}</td>
+      <td>{{ a.version_count }}</td>
+      <td>r{{ a.latest_revision }}</td>
+      <td>
+        {% if a.source_retracted %}
+          <span class="pill retracted">源站已撤稿</span>
+        {% else %}
+          <span class="pill">在发</span>
+        {% endif %}
+      </td>
+      <td class="meta">{{ a.last_checked_at|ts }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="empty">尚未归档任何公告。</p>
+{% endif %}
+
+<h2>最近采集记录</h2>
+{% if events %}
+<div class="card" style="padding:4px 10px">
+<table>
+  <thead><tr><th>时间</th><th>公告号</th><th>结果</th><th>说明</th></tr></thead>
+  <tbody>
+  {% for e in events %}
+    <tr>
+      <td class="meta">{{ e.created_at|ts }}</td>
+      <td>{{ e.announcement_number or "—" }}</td>
+      <td>
+        {% if e.outcome == "created" %}<span class="pill current">新建版本</span>
+        {% elif e.outcome == "unchanged" %}<span class="pill">无变化</span>
+        {% elif e.outcome in ("conflict","revision_mismatch","source_inconsistent") %}
+          <span class="pill conflict">{{ e.outcome }}</span>
+        {% elif e.outcome in ("not_found","withdrawn","source_unavailable") %}
+          <span class="pill retracted">{{ e.outcome }}</span>
+        {% else %}<span class="pill">{{ e.outcome }}</span>{% endif %}
+      </td>
+      <td class="meta">{{ e.detail }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="empty">尚无采集记录。</p>
+{% endif %}
+{% endblock %}

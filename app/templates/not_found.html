@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}未找到 · 公告档案{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>未找到相关公告或版本</h1>
+  <p>公告号 <strong>{{ number }}</strong> 在本档案中尚无记录。</p>
+  <p class="meta">{{ error or "请先在首页输入公告号采集。" }}</p>
+  <p><a href="/">返回档案首页</a></p>
+</div>
+{% endblock %}

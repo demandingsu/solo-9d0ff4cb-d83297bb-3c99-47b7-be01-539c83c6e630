@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}{{ number }} · 公告档案{% endblock %}
+{% block content %}
+{% if status_message %}
+<div class="banner {% if status == 'conflict' %}warn{% endif %}">{{ status_message }}</div>
+{% endif %}
+
+<h1>公告 {{ number }}</h1>
+<p class="meta">
+  共 {{ versions|length }} 个存档版本，最新 r{{ latest.revision }}。
+  {% if announcement and announcement.source_retracted %}
+    <span class="pill retracted">源站已撤稿</span>
+    旧版仍可下载。
+  {% endif %}
+</p>
+
+<div class="two-col">
+  <div class="card">
+    <h2 style="margin-top:0">当前存档（r{{ latest.revision }}）</h2>
+    <dl class="kv">
+      <dt>标题</dt><dd>{{ latest.title }}</dd>
+      <dt>站点修订号</dt><dd>r{{ latest.revision }}
+        <span class="meta">（正文 r{{ latest.body_revision }} / 附件 r{{ latest.attachment_revision }}）</span></dd>
+      <dt>采集时间</dt><dd>{{ latest.captured_at|ts }}</dd>
+      <dt>正文 SHA-256</dt><dd><code>{{ latest.body_sha256 }}</code></dd>
+      <dt>内容指纹</dt><dd><code>{{ latest.content_hash }}</code></dd>
+    </dl>
+  </div>
+  <div class="card">
+    <h2 style="margin-top:0">附件</h2>
+    <p>{{ latest.attachment_filename }}<br>
+      <span class="meta">{{ latest.attachment_content_type }} ·
+        {{ latest.attachment_size|bytes }}</span></p>
+    <dl class="kv">
+      <dt>SHA-256</dt><dd><code>{{ latest.attachment_sha256 }}</code></dd>
+    </dl>
+    <p><a href="/notice/{{ number|urlencode }}/version/{{ latest.revision }}/attachment">下载 r{{ latest.revision }} 附件</a></p>
+  </div>
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">正文（r{{ latest.revision }}）</h2>
+  <pre class="body">{{ latest.body }}</pre>
+</div>
+
+<h2>版本历史</h2>
+{% if versions|length > 1 or events %}
+<div class="card" style="padding:4px 10px">
+<table>
+  <thead>
+    <tr><th>修订</th><th>采集时间</th><th>标题</th><th>附件</th><th>状态</th><th></th></tr>
+  </thead>
+  <tbody>
+  {% for v in versions %}
+    <tr>
+      <td><a href="/notice/{{ number|urlencode }}/version/{{ v.revision }}">r{{ v.revision }}</a>
+        {% if loop.first %}<span class="pill current">最新</span>{% endif %}</td>
+      <td class="meta">{{ v.captured_at|ts }}</td>
+      <td>{{ v.title }}</td>
+      <td class="meta">{{ v.attachment_filename }} · {{ v.attachment_size|bytes }}</td>
+      <td>{% if v.source_retracted %}<span class="pill retracted">采时源站已撤稿</span>
+          {% else %}<span class="pill">已存档</span>{% endif %}</td>
+      <td><a href="/notice/{{ number|urlencode }}/version/{{ v.revision }}">查看</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+
+<h2>核对记录</h2>
+{% if events %}
+<div class="card" style="padding:4px 10px">
+<table>
+  <thead><tr><th>时间</th><th>结果</th><th>修订</th><th>说明</th></tr></thead>
+  <tbody>
+  {% for e in events %}
+    <tr>
+      <td class="meta">{{ e.created_at|ts }}</td>
+      <td>
+        {% if e.outcome == "created" %}<span class="pill current">新建版本</span>
+        {% elif e.outcome == "unchanged" %}<span class="pill">无变化</span>
+        {% elif e.outcome in ("conflict","revision_mismatch","source_inconsistent") %}
+          <span class="pill conflict">{{ e.outcome }}</span>
+        {% else %}<span class="pill retracted">{{ e.outcome }}</span>{% endif %}
+      </td>
+      <td>{{ ("r" ~ e.revision) if e.revision else "—" }}</td>
+      <td class="meta">{{ e.detail }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="empty">尚无核对记录。</p>
+{% endif %}
+
+<div class="card">
+  <form method="post" action="/capture" class="inline-form">
+    <input type="hidden" name="number" value="{{ number }}">
+    <button type="submit">重新采集 / 核对源站</button>
+    <span class="meta">若源站已在同号修订下改稿，将报告冲突且不覆盖旧版。</span>
+  </form>
+</div>
+{% endblock %}

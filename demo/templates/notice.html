@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}{{ notice.number }} · 采购公告示范站{% endblock %}
+{% block content %}
+{% set saved = request.query_params.get('saved') %}
+{% if saved %}
+<div class="banner">
+  {% if saved == 'created' %}公告已发布。
+  {% elif saved == 'new-revision' %}已保存修改并发布新修订 r{{ notice.revision }}。
+  {% elif saved == 'attachment' %}附件已替换，发布新修订 r{{ notice.revision }}。
+  {% elif saved == 'retracted' %}公告已撤稿：站上不再显示，但采集端按撤稿标记记录。
+  {% elif saved == 'restored' %}公告已恢复发布。
+  {% elif saved == 'skew' %}已人为制造正文/附件修订号不一致（演示用）。
+  {% elif saved == 'conflict' %}已在相同修订号下改写正文（演示用）。
+  {% else %}已保存。
+  {% endif %}
+</div>
+{% endif %}
+
+<h1>{{ notice.title }}</h1>
+<p class="meta">
+  公告号 {{ notice.number }} ·
+  站上修订 <strong>r{{ notice.revision }}</strong>
+  （正文 r{{ notice.body_revision }} / 附件 r{{ notice.attachment_revision }}）
+  · 更新于 {{ notice.updated_at }}
+  {% if notice.retracted %}<span class="pill retracted">已撤稿</span>{% endif %}
+</p>
+{% if notice.retracted %}
+<p class="retracted-note">此公告已撤稿，站点访客不再看到内容；档案端仍保留并可下载此前版本。</p>
+{% endif %}
+{% if notice.body_revision != notice.attachment_revision %}
+<div class="banner warn">
+  注意：正文修订号 r{{ notice.body_revision }} 与附件修订号
+  r{{ notice.attachment_revision }} 不一致。正常采集应整次拒收。
+</div>
+{% endif %}
+
+<div class="card">
+  <h2 style="margin-top:0">正文</h2>
+  <pre class="body">{{ notice.body }}</pre>
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">附件（仅一份）</h2>
+  <p>
+    {{ notice.attachment.filename }}
+    <span class="meta">· {{ notice.attachment.content_type }}
+      · {{ notice.attachment.size }} 字节
+      · SHA-256 {{ notice.attachment.sha256[:16] }}…</span>
+  </p>
+  <p><a href="/api/notices/{{ notice.number|urlencode }}/attachment">下载当前附件</a></p>
+</div>
+
+<h2>编辑部操作</h2>
+<div class="row">
+  <div class="card">
+    <h2 style="margin-top:0">改稿（可同时换附件）</h2>
+    <form method="post" action="/notice/{{ notice.number|urlencode }}/edit"
+          enctype="multipart/form-data">
+      <label for="title">标题</label>
+      <input id="title" type="text" name="title" value="{{ notice.title }}" required>
+      <label for="body">正文</label>
+      <textarea id="body" name="body" required>{{ notice.body }}</textarea>
+      <label for="attachment">替换附件（留空则沿用当前附件）</label>
+      <input id="attachment" type="file" name="attachment">
+      <p><button type="submit">保存并发布新修订</button></p>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">仅替换附件</h2>
+    <form method="post" action="/notice/{{ notice.number|urlencode }}/attachment"
+          enctype="multipart/form-data">
+      <label for="attachment2">新附件</label>
+      <input id="attachment2" type="file" name="attachment" required>
+      <p><button type="submit">替换附件并发布新修订</button></p>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">撤稿 / 恢复</h2>
+  <form method="post" action="/notice/{{ notice.number|urlencode }}/retract"
+        style="display:inline">
+    {% if notice.retracted %}
+    <input type="hidden" name="action" value="restore">
+    <button class="secondary" type="submit">恢复发布</button>
+    {% else %}
+    <input type="hidden" name="action" value="retract">
+    <button class="danger" type="submit">撤稿</button>
+    {% endif %}
+  </form>
+</div>
+
+<div class="card demo-box">
+  <h2>演示用异常开关</h2>
+  <div class="row">
+    <form method="post" action="/demo/{{ notice.number|urlencode }}/skew">
+      <p class="checks">制造正文/附件修订号不一致，用于验证采集端整次拒收。</p>
+      <label>正文修订号</label>
+      <input type="number" name="body_revision" value="{{ notice.revision + 1 }}" min="1">
+      <label>附件修订号</label>
+      <input type="number" name="attachment_revision" value="{{ notice.revision }}" min="1">
+      <p><button class="secondary" type="submit">设置不一致</button></p>
+    </form>
+    <form method="post" action="/demo/{{ notice.number|urlencode }}/conflict">
+      <p class="checks">在相同修订号 r{{ notice.revision }} 下改写正文，用于验证同号内容不同冲突。</p>
+      <label>新正文（修订号不变）</label>
+      <textarea name="body" required>{{ notice.body }}
+
+（演示：同号不同内容）</textarea>
+      <p><button class="secondary" type="submit">同号改写</button></p>
+    </form>
+  </div>
+</div>
+{% endblock %}

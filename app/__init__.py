@@ -1,0 +1,1 @@
+"""Municipal procurement announcement archive."""
