@@ -55,6 +55,47 @@ class ArchiveStorageError(ArchiveError):
     pass
 
 
+class SearchNotReady(ArchiveError):
+    """The text index is incomplete (backfill running or failed)."""
+
+
+MIN_QUERY_CHARS = 3
+MAX_QUERY_CHARS = 1000
+SNIPPET_CONTEXT_BEFORE = 30
+SNIPPET_CONTEXT_AFTER = 70
+
+
+def trigrams(text: str) -> set[str]:
+    """Distinct 3-character substrings of *text*.
+
+    Purely literal: no case folding, no punctuation stripping, so the index
+    preserves exactly the semantics of the search (case-sensitive, every
+    character significant).
+    """
+    if len(text) < 3:
+        return set()
+    return {text[i : i + 3] for i in range(len(text) - 2)}
+
+
+def snippet_parts(
+    text: str,
+    query: str,
+    *,
+    context_before: int = SNIPPET_CONTEXT_BEFORE,
+    context_after: int = SNIPPET_CONTEXT_AFTER,
+) -> tuple[str, str, str] | None:
+    """(before, hit, after) window around the first literal match, or None."""
+    pos = text.find(query)
+    if pos < 0:
+        return None
+    start = max(0, pos - context_before)
+    end = min(len(text), pos + len(query) + context_after)
+    before = ("…" if start > 0 else "") + text[start:pos]
+    hit = text[pos : pos + len(query)]
+    after = text[pos + len(query) : end] + ("…" if end < len(text) else "")
+    return before, hit, after
+
+
 def normalize_number(value: str) -> str:
     number = (value or "").strip()
     if not number or not NUMBER_RE.fullmatch(number):
@@ -229,6 +270,18 @@ class VersionRecord:
 
 
 CaptureStatus = Literal["created", "unchanged", "conflict", "retracted_update"]
+
+
+@dataclass(frozen=True)
+class SearchHit:
+    """One matching archived revision (a revision is listed at most once)."""
+
+    announcement_number: str
+    revision: int
+    field: str  # "title" | "body" — where the snippet was taken from
+    before: str
+    hit: str
+    after: str
 
 
 @dataclass(frozen=True)

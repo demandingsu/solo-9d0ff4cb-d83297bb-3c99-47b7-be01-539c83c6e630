@@ -12,6 +12,21 @@
   </form>
 </div>
 
+<div class="card">
+  <form method="get" action="/search" class="inline-form">
+    <label for="q" style="margin:0">原文检索</label>
+    <input id="q" type="text" name="q" required minlength="3"
+           placeholder="标题/正文片段，至少 3 个字符" style="max-width:280px">
+    <button type="submit">检索</button>
+  </form>
+  {% if search_status and not search_status.ready %}
+  <p class="meta" style="margin:8px 0 0">
+    ⚠ 原文检索未就绪（索引补建中或曾失败），暂不能检索；采集与原档浏览不受影响。
+    <a href="/search">查看检索状态</a>
+  </p>
+  {% endif %}
+</div>
+
 <h2>已归档公告</h2>
 {% if announcements %}
 <div class="card" style="padding:4px 10px">

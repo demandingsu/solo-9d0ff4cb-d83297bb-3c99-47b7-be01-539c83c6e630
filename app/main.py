@@ -12,8 +12,11 @@ from fastapi.templating import Jinja2Templates
 
 from .capture import CaptureService
 from .domain import (
+    MAX_QUERY_CHARS,
+    MIN_QUERY_CHARS,
     ArchiveStorageError,
     InvalidNumber,
+    SearchNotReady,
     SourceError,
     format_bytes,
     format_timestamp,
@@ -22,6 +25,8 @@ from .source import HttpSourceClient
 from .store import ArchiveStore
 
 BASE_DIR = Path(__file__).resolve().parent
+
+SEARCH_RESULT_LIMIT = 200
 
 
 def _env(name: str, default: str) -> str:
@@ -34,9 +39,11 @@ def create_app(
     db_path: str | None = None,
     source_base_url: str | None = None,
     source_client=None,
+    auto_index: bool = True,
 ) -> FastAPI:
     store = ArchiveStore(
-        db_path or _env("ARCHIVE_DB_PATH", "./data/archive.db")
+        db_path or _env("ARCHIVE_DB_PATH", "./data/archive.db"),
+        auto_index=auto_index,
     )
     source = HttpSourceClient(
         source_base_url or _env("SOURCE_BASE_URL", "http://127.0.0.1:8000"),
@@ -70,10 +77,66 @@ def create_app(
             {
                 "announcements": store.list_announcements(),
                 "events": store.recent_events(),
+                "search_status": store.search_status(),
                 "captured": request.query_params.get("captured"),
                 "error": request.query_params.get("error"),
             },
         )
+
+    @app.get("/search", response_class=HTMLResponse)
+    def search(request: Request):
+        q = request.query_params.get("q")
+        context = {
+            "q": q or "",
+            "search_status": store.search_status(),
+            "results": None,
+            "truncated": False,
+            "error": None,
+        }
+        context["status_message"] = _search_status_message(
+            context["search_status"]
+        )
+        if not q:
+            return templates.TemplateResponse(request, "search.html", context)
+        if len(q) < MIN_QUERY_CHARS:
+            context["error"] = (
+                f"请至少输入 {MIN_QUERY_CHARS} 个字符再检索"
+                f"（当前 {len(q)} 个）。标点与空白也按字符计。"
+            )
+            return templates.TemplateResponse(request, "search.html", context)
+        if len(q) > MAX_QUERY_CHARS:
+            context["error"] = (
+                f"检索内容过长：最多 {MAX_QUERY_CHARS} 个字符。"
+            )
+            return templates.TemplateResponse(request, "search.html", context)
+        if not context["search_status"]["ready"]:
+            return templates.TemplateResponse(request, "search.html", context)
+        try:
+            hits, truncated = store.search_versions(
+                q, limit=SEARCH_RESULT_LIMIT
+            )
+        except SearchNotReady:
+            # The index flipped to not-ready between the check and the query;
+            # re-read the state and show the honest status page.
+            context["search_status"] = store.search_status()
+            context["status_message"] = _search_status_message(
+                context["search_status"]
+            )
+            return templates.TemplateResponse(request, "search.html", context)
+        except ArchiveStorageError as exc:
+            context["error"] = exc.message
+            return templates.TemplateResponse(request, "search.html", context)
+        context["results"] = hits
+        context["truncated"] = truncated
+        return templates.TemplateResponse(request, "search.html", context)
+
+    @app.post("/search/reindex")
+    def reindex():
+        try:
+            store.backfill_search_index()
+        except ArchiveStorageError:
+            pass  # state row already records the failure; the page shows it
+        return RedirectResponse("/search", status_code=303)
 
     @app.post("/capture")
     def capture(number: str = Form(...)):
@@ -162,6 +225,17 @@ _STATUS_MESSAGES = {
     "conflict": "采集被拒：源站冲突，旧版未覆盖。",
     "retracted_update": "已记录源站撤稿状态变化，未新建版本。",
 }
+
+
+def _search_status_message(status: dict) -> str | None:
+    if status["ready"]:
+        return None
+    progress = ""
+    if status.get("indexed") is not None and status.get("total") is not None:
+        progress = f"（已建索引 {status['indexed']} / {status['total']} 个版本）"
+    if status["status"] == "failed":
+        return f"检索索引补建失败{progress}：{status.get('detail') or '未知原因'}"
+    return f"检索索引补建中{progress}，暂未就绪"
 
 
 def _error_redirect(number: str, message: str) -> RedirectResponse:

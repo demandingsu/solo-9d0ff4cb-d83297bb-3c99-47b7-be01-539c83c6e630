@@ -1,13 +1,24 @@
 """SQLite persistence with all-or-nothing version writes.
 
-Each version row and its attachment blob are inserted in the same explicit
-transaction. sqlite3's isolation_level is disabled so we control BEGIN/COMMIT
-and never leave autocommitted fragments behind. A write-ahead log plus
-synchronous=FULL makes an interrupted process leave either a complete version
-or no version at all (SQLite rolls the partial transaction back on recovery).
+Each version row, its attachment blob and its search-index rows are inserted
+in the same explicit transaction. sqlite3's isolation_level is disabled so we
+control BEGIN/COMMIT and never leave autocommitted fragments behind. A
+write-ahead log plus synchronous=FULL makes an interrupted process leave
+either a complete version or no version at all (SQLite rolls the partial
+transaction back on recovery).
+
+Search index: ``search_docs`` holds the indexed text (title + body, never the
+attachment blob) and ``search_grams`` a trigram postings table, so literal,
+case-sensitive queries are answered from the index alone — the versions
+table and attachment blobs are never scanned at query time. ``search_state``
+tracks backfill progress: historical versions are indexed in chunked
+transactions and the index is marked 'ready' only inside the transaction
+that verifies no unindexed version remains, so an interrupted or failed
+backfill can never serve partial results.
 """
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 from pathlib import Path
@@ -15,9 +26,15 @@ from typing import Iterable
 
 from .domain import (
     ArchiveStorageError,
+    SearchHit,
+    SearchNotReady,
     VersionRecord,
+    snippet_parts,
+    trigrams,
     utc_now_iso,
 )
+
+log = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS announcements (
@@ -63,14 +80,54 @@ CREATE TABLE IF NOT EXISTS capture_log (
     detail          TEXT NOT NULL,
     created_at      TEXT NOT NULL
 );
+
+-- Search index: one row per archived version holding the searchable text
+-- (title + body only; attachment bytes are never copied here).
+CREATE TABLE IF NOT EXISTS search_docs (
+    version_id          INTEGER PRIMARY KEY
+                        REFERENCES versions(id),
+    announcement_number TEXT NOT NULL,
+    revision            INTEGER NOT NULL,
+    title               TEXT NOT NULL,
+    body                TEXT NOT NULL
+);
+
+-- Trigram postings: version_id lists keyed by 3-character substring.
+CREATE TABLE IF NOT EXISTS search_grams (
+    gram        TEXT NOT NULL,
+    version_id  INTEGER NOT NULL,
+    PRIMARY KEY (gram, version_id)
+) WITHOUT ROWID;
+
+-- Backfill bookkeeping. Exactly one row (id = 1).
+CREATE TABLE IF NOT EXISTS search_state (
+    id              INTEGER PRIMARY KEY CHECK (id = 1),
+    status          TEXT NOT NULL CHECK (status IN ('building', 'ready', 'failed')),
+    indexed_up_to   INTEGER NOT NULL DEFAULT 0,
+    updated_at      TEXT NOT NULL,
+    detail          TEXT
+);
 """
+
+_UNINDEXED_SQL = """
+SELECT v.id, v.announcement_number, v.revision, v.title, v.body
+FROM versions v
+WHERE NOT EXISTS (SELECT 1 FROM search_docs d WHERE d.version_id = v.id)
+ORDER BY v.id
+"""
+
+# A query contributes at most this many distinct trigrams to the narrowing
+# phase; the instr() verification keeps results exact regardless.
+SEARCH_GRAM_CAP = 64
 
 
 class ArchiveStore:
-    def __init__(self, db_path: str | os.PathLike[str]):
+    def __init__(self, db_path: str | os.PathLike[str], *, auto_index: bool = True):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.initialize()
+        if auto_index:
+            self._auto_backfill()
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
@@ -215,6 +272,265 @@ class ArchiveStore:
             conn.close()
         return [dict(r) for r in rows]
 
+    # --------------------------------------------------------------- search
+
+    def search_status(self) -> dict:
+        """Readiness of the text index for the search page.
+
+        'ready' means every committed version is indexed; anything else means
+        search must refuse to answer rather than show incomplete results.
+        """
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT status, detail, updated_at FROM search_state WHERE id = 1"
+            ).fetchone()
+            status = row["status"] if row else "building"
+            result = {
+                "ready": status == "ready",
+                "status": status,
+                "detail": (row["detail"] if row else None) or None,
+                "updated_at": row["updated_at"] if row else None,
+            }
+            if status != "ready":
+                result["indexed"] = conn.execute(
+                    "SELECT COUNT(*) FROM search_docs"
+                ).fetchone()[0]
+                result["total"] = conn.execute(
+                    "SELECT COUNT(*) FROM versions"
+                ).fetchone()[0]
+                if row is None:
+                    result["detail"] = "检索索引尚未建立。"
+            return result
+        finally:
+            conn.close()
+
+    def search_versions(
+        self, query: str, *, limit: int = 200
+    ) -> tuple[list[SearchHit], bool]:
+        """Literal, case-sensitive search over indexed titles and bodies.
+
+        Reads only the search-index tables (never the versions table or
+        attachment blobs) inside one read transaction, so the result list is
+        a single committed snapshot and every hit references a committed
+        revision. Raises SearchNotReady if the index is incomplete.
+        """
+        grams = sorted(trigrams(query))[:SEARCH_GRAM_CAP]
+        if not grams:
+            return [], False
+        placeholders = ", ".join("?" for _ in grams)
+        sql = f"""
+            SELECT d.announcement_number, d.revision, d.title, d.body
+            FROM search_docs d
+            WHERE d.version_id IN (
+                SELECT g.version_id FROM search_grams g
+                WHERE g.gram IN ({placeholders})
+                GROUP BY g.version_id
+                HAVING COUNT(DISTINCT g.gram) = ?
+            )
+            AND (instr(d.title, ?) > 0 OR instr(d.body, ?) > 0)
+            ORDER BY d.announcement_number, d.revision DESC
+            LIMIT ?
+        """
+        params = (*grams, len(grams), query, query, limit + 1)
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN")
+            row = conn.execute(
+                "SELECT status FROM search_state WHERE id = 1"
+            ).fetchone()
+            if row is None or row["status"] != "ready":
+                conn.execute("ROLLBACK")
+                raise SearchNotReady(
+                    "检索索引未就绪：历史版本补建未完成或曾失败，"
+                    "为避免展示不完整结果，本次不返回命中。"
+                )
+            rows = conn.execute(sql, params).fetchall()
+            conn.execute("COMMIT")
+        except SearchNotReady:
+            raise
+        except sqlite3.Error as exc:
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            raise ArchiveStorageError(f"检索查询失败：{exc}") from exc
+        finally:
+            conn.close()
+
+        truncated = len(rows) > limit
+        hits: list[SearchHit] = []
+        for row in rows[:limit]:
+            snippet = snippet_parts(row["title"], query)
+            field = "title"
+            if snippet is None:
+                snippet = snippet_parts(row["body"], query)
+                field = "body"
+            if snippet is None:
+                continue  # instr() verified a match; never emit a false hit
+            before, hit, after = snippet
+            hits.append(
+                SearchHit(
+                    announcement_number=row["announcement_number"],
+                    revision=row["revision"],
+                    field=field,
+                    before=before,
+                    hit=hit,
+                    after=after,
+                )
+            )
+        return hits, truncated
+
+    def backfill_search_index(
+        self, *, chunk_size: int = 200, max_chunks: int | None = None
+    ) -> None:
+        """Index every archived version missing from the search index.
+
+        Each chunk commits separately, so an interrupted run leaves resumable
+        progress with the state stuck at 'building' (never silently partial).
+        The 'ready' mark is written only in the final transaction, after
+        verifying that no unindexed version remains. Versions captured while
+        the backfill runs are indexed by insert_version itself and skipped
+        here. ``max_chunks`` bounds the work done in one call (used to
+        simulate an interrupted backfill); remaining versions stay pending.
+        """
+        if chunk_size < 1:
+            raise ValueError("chunk_size 必须为正整数")
+        conn = self._connect()
+        chunks = 0
+        try:
+            row = conn.execute(
+                "SELECT status FROM search_state WHERE id = 1"
+            ).fetchone()
+            if row is not None and row["status"] == "ready":
+                missing = conn.execute(_UNINDEXED_SQL + " LIMIT 1").fetchone()
+                if missing is None:
+                    return  # already complete; nothing to do
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                INSERT INTO search_state
+                    (id, status, indexed_up_to, updated_at, detail)
+                VALUES (1, 'building', 0, ?, NULL)
+                ON CONFLICT(id) DO UPDATE SET
+                    status = 'building',
+                    updated_at = excluded.updated_at,
+                    detail = NULL
+                """,
+                (utc_now_iso(),),
+            )
+            conn.execute("COMMIT")
+
+            while True:
+                if max_chunks is not None and chunks >= max_chunks:
+                    return
+                conn.execute("BEGIN IMMEDIATE")
+                rows = conn.execute(
+                    _UNINDEXED_SQL + " LIMIT ?", (chunk_size,)
+                ).fetchall()
+                if not rows:
+                    conn.execute(
+                        "UPDATE search_state SET status = 'ready', "
+                        "updated_at = ?, detail = NULL WHERE id = 1",
+                        (utc_now_iso(),),
+                    )
+                    conn.execute("COMMIT")
+                    return
+                for row in rows:
+                    self._index_version_tx(
+                        conn,
+                        row["id"],
+                        row["announcement_number"],
+                        row["revision"],
+                        row["title"],
+                        row["body"],
+                    )
+                conn.execute(
+                    "UPDATE search_state SET indexed_up_to = ?, "
+                    "updated_at = ? WHERE id = 1",
+                    (rows[-1]["id"], utc_now_iso()),
+                )
+                conn.execute("COMMIT")
+                chunks += 1
+        except sqlite3.Error as exc:
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            self._mark_search_failed(f"检索索引补建失败：{exc}")
+            raise ArchiveStorageError(
+                f"检索索引补建失败：{exc}；采集与原档浏览不受影响。"
+            ) from exc
+        finally:
+            conn.close()
+
+    def _auto_backfill(self) -> None:
+        """First enablement on an old database: index historical revisions.
+
+        A backfill failure must never take capture or browsing down, so it is
+        recorded in the index state (search then reports 'not ready') instead
+        of being raised to the caller.
+        """
+        try:
+            self.backfill_search_index()
+        except ArchiveStorageError:
+            log.exception(
+                "检索索引补建失败；检索将显示未就绪，采集与原档浏览不受影响"
+            )
+
+    def _mark_search_failed(self, detail: str) -> None:
+        try:
+            conn = self._connect()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    """
+                    INSERT INTO search_state
+                        (id, status, indexed_up_to, updated_at, detail)
+                    VALUES (1, 'failed', 0, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        status = 'failed',
+                        updated_at = excluded.updated_at,
+                        detail = excluded.detail
+                    """,
+                    (utc_now_iso(), detail),
+                )
+                conn.execute("COMMIT")
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            log.exception("无法记录检索索引失败状态")
+
+    def _index_version_tx(
+        self,
+        conn: sqlite3.Connection,
+        version_id: int,
+        number: str,
+        revision: int,
+        title: str,
+        body: str,
+    ) -> None:
+        """Index one version inside the caller's transaction.
+
+        Runs in the same BEGIN IMMEDIATE … COMMIT as the version insert (or
+        as one backfill chunk), so a committed version is always searchable
+        and a failed index write rolls the version back with it.
+        """
+        conn.execute(
+            """
+            INSERT INTO search_docs
+                (version_id, announcement_number, revision, title, body)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (version_id, number, revision, title, body),
+        )
+        grams = trigrams(title) | trigrams(body)
+        if grams:
+            conn.executemany(
+                "INSERT INTO search_grams (gram, version_id) VALUES (?, ?)",
+                [(gram, version_id) for gram in grams],
+            )
+
     # --------------------------------------------------------------- writes
 
     def insert_version(
@@ -222,9 +538,12 @@ class ArchiveStore:
     ) -> bool:
         """Atomically archive one version.
 
-        Returns False when that source revision was already archived (no new
-        version row is created). Raises ArchiveStorageError on any storage
-        failure, rolling back so no partial version can be observed.
+        The announcement row, version row, attachment blob, search-index rows
+        and capture log entry commit in one transaction, so a version is
+        never archived without being searchable. Returns False when that
+        source revision was already archived (no new version row is created).
+        Raises ArchiveStorageError on any storage failure, rolling back so no
+        partial version can be observed.
         """
         conn = self._connect()
         now = record.captured_at or utc_now_iso()
@@ -258,7 +577,7 @@ class ArchiveStore:
                     now,
                 ),
             )
-            conn.execute(
+            cursor = conn.execute(
                 """
                 INSERT INTO versions (
                     announcement_number, revision, body_revision,
@@ -288,6 +607,14 @@ class ArchiveStore:
                     record.source_updated_at,
                     record.captured_at,
                 ),
+            )
+            self._index_version_tx(
+                conn,
+                cursor.lastrowid,
+                record.announcement_number,
+                record.revision,
+                record.title,
+                record.body,
             )
             conn.execute(
                 """

@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}原文检索 · 公告档案{% endblock %}
+{% block content %}
+<h1>原文检索</h1>
+<p class="meta">
+  在已存档公告的<strong>标题与正文</strong>中按字面查找：区分大小写，标点按普通字符处理；
+  至少输入 3 个字符。撤稿的旧版同样可查，同一修订只列一次。
+</p>
+
+<div class="card">
+  <form method="get" action="/search" class="inline-form">
+    <label for="q" style="margin:0">检索内容</label>
+    <input id="q" type="text" name="q" value="{{ q }}" required minlength="3"
+           placeholder="粘贴招标条款片段，至少 3 个字符" style="max-width:360px">
+    <button type="submit">检索</button>
+  </form>
+</div>
+
+{% if error %}
+{# 错误提示由 base.html 的 banner 展示，这里不再重复。 #}
+{% elif not search_status.ready %}
+<div class="banner warn">
+  <strong>原文检索未就绪。</strong>{{ status_message }}。
+  为避免展示不完整结果，本次不返回命中；采集与原档浏览不受影响。
+  <form method="post" action="/search/reindex" class="inline-form" style="margin-top:8px">
+    <button type="submit">重新补建索引</button>
+    <span class="meta">补建完成后即可检索全部存档版本。</span>
+  </form>
+</div>
+{% elif results is not none %}
+  {% if results %}
+  <p class="meta">
+    共 {{ results|length }} 条命中{% if truncated %}；结果过多，仅显示前 {{ results|length }} 条，请加长检索词{% endif %}。
+  </p>
+  <div class="card" style="padding:4px 10px">
+  <table>
+    <thead>
+      <tr><th>公告号</th><th>修订</th><th>命中位置</th><th>命中片段</th><th>原版入口</th></tr>
+    </thead>
+    <tbody>
+    {% for r in results %}
+      <tr>
+        <td><a href="/notice/{{ r.announcement_number|urlencode }}">{{ r.announcement_number }}</a></td>
+        <td>r{{ r.revision }}</td>
+        <td>{{ "标题" if r.field == "title" else "正文" }}</td>
+        <td>{{ r.before }}<mark>{{ r.hit }}</mark>{{ r.after }}</td>
+        <td><a href="/notice/{{ r.announcement_number|urlencode }}/version/{{ r.revision }}">查看原版 r{{ r.revision }}</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="empty">没有命中的存档版本。检索按字面匹配（区分大小写），请核对片段是否与原文完全一致。</p>
+  {% endif %}
+{% endif %}
+{% endblock %}
